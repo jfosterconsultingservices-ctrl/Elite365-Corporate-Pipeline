@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Elite365 BD Command Center</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{background:#f8fafc;color:#0f172a;font-family:'DM Sans',sans-serif;min-height:100vh}
+    ::-webkit-scrollbar{width:6px;height:6px}
+    ::-webkit-scrollbar-track{background:#f1f5f9}
+    ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+    select,input,textarea{font-family:'DM Sans',sans-serif}
+    option{background:#fff;color:#0f172a}
+    button:focus{outline:none}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, useEffect, useCallback } = React;
+
+// ── PASTE YOUR APPS SCRIPT URL HERE after deploying ──────────────────────────
+const APPS_SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_URL_HERE";
+
+const BRANDS = [
+  { id:"elite365_locums", name:"Elite365 Locums & Perm", short:"E365 Locums", sheet:"Elite365_Locums", color:"#0f172a", bg:"#f1f5f9", badgeBg:"#e2e8f0", specialty:"Locum Tenens & Permanent Placement", segments:["Hospital System","FQHC","CAH","Private Practice","Government"], types:["Locum Tenens","Permanent","Temp-to-Perm"] },
+  { id:"elite365_intl", name:"Elite365 Intl Nursing", short:"E365 Intl RN", sheet:"Elite365_IntlNursing", color:"#0369a1", bg:"#e0f2fe", badgeBg:"#bae6fd", specialty:"International Nurse Staffing", segments:["Hospital System","CAH","Long-Term Care","Government","FQHC"], types:["3-Year Contract","Direct Hire","FTE Conversion"] },
+  { id:"cci", name:"Critical Connection", short:"CCI", sheet:"CCI_Therapy", color:"#7c3aed", bg:"#ede9fe", badgeBg:"#ddd6fe", specialty:"Therapy Staffing (PT, OT, SLP)", segments:["SNF","Inpatient","Outpatient","Acute Care","Ortho Sports"], types:["Travel Assignment","Direct Hire","Per Diem"] },
+  { id:"focusstaff", name:"FocusStaff", short:"FocusStaff", sheet:"FocusStaff", color:"#0891b2", bg:"#cffafe", badgeBg:"#a5f3fc", specialty:"Travel Nurses & Allied Professionals", segments:["Hospital System","Trauma Center","Specialty Clinic","Government","CAH"], types:["Travel Nurse","Allied Travel","Permanent","Per Diem"] },
+  { id:"wms", name:"Wilderness Medical", short:"WMS", sheet:"WMS", color:"#16a34a", bg:"#dcfce7", badgeBg:"#bbf7d0", specialty:"Rural, Remote and Tribal Staffing", segments:["Healthcare","Government","SLED","IHS/Tribal","Federal"], types:["CAH","IHS/Tribal","SLED","Federal"] },
+  { id:"proxi", name:"Proxi Dental", short:"Proxi", sheet:"Proxi_Dental", color:"#ea580c", bg:"#ffedd5", badgeBg:"#fed7aa", specialty:"Dental Clinician Staffing", segments:["DSO","Private Practice","Community Health","Pediatric","Specialty"], types:["Locum Tenens","Permanent","Temp-to-Perm","Per Diem"] },
+];
+
+const COLUMNS   = ["id","name","account","segment","type","stage","value","gp","closeDate","startDate","owner","status","priority","notes"];
+const STAGES    = ["Discovery","Qualified","Proposal","Negotiation","Closed Won","Closed Lost"];
+const STATUSES  = ["On Track","At Risk","Won","Lost"];
+const PRIORITIES= ["High","Medium","Low"];
+const STAGE_COLORS={"Discovery":"#0ea5e9","Qualified":"#7c3aed","Proposal":"#ea580c","Negotiation":"#ca8a04","Closed Won":"#16a34a","Closed Lost":"#dc2626"};
+const STAGE_BG={"Discovery":"#e0f2fe","Qualified":"#ede9fe","Proposal":"#ffedd5","Negotiation":"#fef9c3","Closed Won":"#dcfce7","Closed Lost":"#fee2e2"};
+const STATUS_COLORS={"On Track":"#16a34a","At Risk":"#ca8a04","Won":"#16a34a","Lost":"#dc2626"};
+const STATUS_BG={"On Track":"#dcfce7","At Risk":"#fef9c3","Won":"#dcfce7","Lost":"#fee2e2"};
+const PRIORITY_DOT={"High":"#dc2626","Medium":"#ca8a04","Low":"#16a34a"};
+const C={bg:"#f8fafc",border:"#e2e8f0",text:"#0f172a",textMid:"#475569",textLight:"#94a3b8"};
+
+const fmt=n=>n>=1000000?"$"+(n/1000000).toFixed(1)+"M":"$"+(n/1000).toFixed(0)+"K";
+const fmtFull=n=>"$"+Number(n).toLocaleString();
+const today=new Date();
+const daysUntil=d=>Math.ceil((new Date(d)-today)/86400000);
+const uid=()=>"d_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);
+
+function rowToDeal(row){return{id:row[0]||uid(),name:row[1]||"",account:row[2]||"",segment:row[3]||"",type:row[4]||"",stage:row[5]||"Discovery",value:Number(row[6])||0,gp:Number(row[7])||0,closeDate:row[8]||"",startDate:row[9]||"",owner:row[10]||"",status:row[11]||"On Track",priority:row[12]||"Medium",notes:row[13]||""};}
+function dealToRow(d){return COLUMNS.map(c=>d[c]!==undefined?d[c]:"");}
+
+async function sheetRead(sheetName){
+  try{const res=await fetch(APPS_SCRIPT_URL+"?sheet="+encodeURIComponent(sheetName));const data=await res.json();return data.rows||[];}
+  catch{return[];}
+}
+async function sheetWrite(action,payload,sheetName){
+  try{const res=await fetch(APPS_SCRIPT_URL,{method:"POST",body:JSON.stringify({action,sheetName,...payload})});return await res.json();}
+  catch{return{ok:false};}
+}
+
+function Icon({name,size=16,color="currentColor"}){
+  const p={stroke:color,strokeWidth:"2",fill:"none",width:size,height:size,viewBox:"0 0 24 24"};
+  if(name==="kanban") return <svg {...p}><rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="15" rx="1"/></svg>;
+  if(name==="table")  return <svg {...p}><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>;
+  if(name==="chart")  return <svg {...p}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>;
+  if(name==="plus")   return <svg {...p}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+  if(name==="close")  return <svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+  if(name==="edit")   return <svg {...p}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+  if(name==="trash")  return <svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>;
+  if(name==="refresh")return <svg {...p}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>;
+  if(name==="home")   return <svg {...p}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>;
+  return null;
+}
+
+function DealModal({deal,onClose,onSave,saving,brand}){
+  const blank={name:"",account:"",segment:brand.segments[0],type:brand.types[0],stage:"Discovery",value:"",gp:"",closeDate:"",startDate:"",owner:"",status:"On Track",priority:"Medium",notes:""};
+  const[form,setForm]=useState(deal||blank);
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const iStyle={width:"100%",background:"#f8fafc",border:"1px solid "+C.border,borderRadius:8,color:C.text,padding:"8px 12px",fontSize:14,boxSizing:"border-box"};
+  const fields=[
+    {label:"Deal Name",key:"name",type:"text",full:true},{label:"Account / Client",key:"account",type:"text",full:true},
+    {label:"Segment",key:"segment",type:"select",opts:brand.segments},{label:"Type",key:"type",type:"select",opts:brand.types},
+    {label:"Stage",key:"stage",type:"select",opts:STAGES},{label:"Status",key:"status",type:"select",opts:STATUSES},
+    {label:"Priority",key:"priority",type:"select",opts:PRIORITIES},{label:"Owner",key:"owner",type:"text"},
+    {label:"Contract Value ($)",key:"value",type:"number"},{label:"Revenue ($)",key:"gp",type:"number"},
+    {label:"Start Date",key:"startDate",type:"date"},{label:"Close Date",key:"closeDate",type:"date"},
+    {label:"Notes",key:"notes",type:"textarea",full:true},
+  ];
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}}>
+      <div style={{background:"#fff",border:"1px solid "+C.border,borderRadius:16,width:"min(660px,95vw)",maxHeight:"90vh",overflowY:"auto",padding:32,boxShadow:"0 20px 60px rgba(0,0,0,0.15)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+          <div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:C.text}}>{deal?"Edit Deal":"New Deal"}</div>
+            <div style={{fontSize:11,color:brand.color,fontWeight:600,marginTop:2}}>{brand.name}</div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer"}}><Icon name="close" size={20} color={C.textLight}/></button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          {fields.map(f=>(
+            <div key={f.key} style={{gridColumn:f.full?"1/-1":"auto"}}>
+              <label style={{display:"block",color:C.textMid,fontSize:11,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:6}}>{f.label}</label>
+              {f.type==="select"?<select value={form[f.key]} onChange={e=>set(f.key,e.target.value)} style={iStyle}>{f.opts.map(o=><option key={o}>{o}</option>)}</select>
+              :f.type==="textarea"?<textarea value={form[f.key]} onChange={e=>set(f.key,e.target.value)} rows={3} style={{...iStyle,resize:"vertical"}}/>
+              :<input type={f.type} value={form[f.key]} onChange={e=>set(f.key,e.target.value)} style={iStyle}/>}
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:12,marginTop:24,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{background:"#f1f5f9",border:"1px solid "+C.border,color:C.textMid,borderRadius:8,padding:"10px 20px",cursor:"pointer",fontSize:14}}>Cancel</button>
+          <button onClick={()=>onSave({...form,value:Number(form.value),gp:Number(form.gp),id:deal?.id||uid()})} disabled={saving}
+            style={{background:brand.color,border:"none",color:"#fff",borderRadius:8,padding:"10px 24px",cursor:"pointer",fontSize:14,fontWeight:600,opacity:saving?0.7:1}}>
+            {saving?"Saving...":deal?"Save Changes":"Add Deal"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KanbanView({deals,onEdit,onDelete,brand}){
+  const byStage=STAGES.reduce((a,s)=>({...a,[s]:deals.filter(d=>d.stage===s)}),{});
+  return(
+    <div style={{display:"flex",gap:16,overflowX:"auto",paddingBottom:16}}>
+      {STAGES.map(stage=>{
+        const col=byStage[stage];const colRev=col.reduce((s,d)=>s+d.gp,0);
+        const ac=STAGE_COLORS[stage];const ab=STAGE_BG[stage];
+        return(
+          <div key={stage} style={{minWidth:256,flex:"0 0 256px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <span style={{background:ab,color:ac,fontSize:11,fontWeight:700,textTransform:"uppercase",padding:"4px 12px",borderRadius:20}}>{stage}</span>
+              <span style={{color:C.textLight,fontSize:11}}>{col.length} · {fmt(colRev)}</span>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {col.map(deal=>(
+                <div key={deal.id} style={{background:"#fff",border:"1px solid "+C.border,borderLeft:"3px solid "+ac,borderRadius:10,padding:14,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                    <span style={{color:C.text,fontSize:13,fontWeight:600,lineHeight:1.4,flex:1}}>{deal.name}</span>
+                    <div style={{display:"flex",gap:4,marginLeft:8}}>
+                      <button onClick={()=>onEdit(deal)} style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Icon name="edit" size={13} color={C.textLight}/></button>
+                      <button onClick={()=>onDelete(deal.id)} style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Icon name="trash" size={13} color="#dc2626"/></button>
+                    </div>
+                  </div>
+                  <div style={{color:C.textMid,fontSize:11,marginBottom:10}}>{deal.account}</div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <span style={{color:C.text,fontSize:12,fontWeight:700}}>{fmt(deal.gp)} <span style={{color:C.textLight,fontWeight:400,fontSize:11}}>rev</span></span>
+                    <span style={{background:brand.badgeBg,color:brand.color,fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:600}}>{deal.segment||deal.type}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span style={{background:STATUS_BG[deal.status],color:STATUS_COLORS[deal.status],fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:20}}>{deal.status}</span>
+                    <span style={{color:C.textLight,fontSize:10}}>{deal.closeDate}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TableView({deals,onEdit,onDelete,brand}){
+  const[sortKey,setSortKey]=useState("closeDate");const[sortDir,setSortDir]=useState("asc");
+  const sorted=useMemo(()=>[...deals].sort((a,b)=>{let av=a[sortKey],bv=b[sortKey];if(typeof av==="string"){av=av.toLowerCase();bv=bv.toLowerCase();}return sortDir==="asc"?(av>bv?1:-1):(av<bv?1:-1);}),[deals,sortKey,sortDir]);
+  const hs=k=>{if(sortKey===k)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortKey(k);setSortDir("asc");}};
+  const cols=[{key:"name",label:"Deal"},{key:"segment",label:"Segment"},{key:"type",label:"Type"},{key:"stage",label:"Stage"},{key:"value",label:"Value"},{key:"gp",label:"Revenue"},{key:"status",label:"Status"},{key:"priority",label:"Priority"},{key:"closeDate",label:"Close Date"}];
+  const th={padding:"10px 14px",textAlign:"left",color:C.textMid,fontSize:11,letterSpacing:"0.07em",textTransform:"uppercase",cursor:"pointer",whiteSpace:"nowrap",background:"#f8fafc",borderBottom:"1px solid "+C.border};
+  return(
+    <div style={{overflowX:"auto",background:"#fff",borderRadius:12,border:"1px solid "+C.border,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr>{cols.map(c=><th key={c.key} style={th} onClick={()=>hs(c.key)}>{c.label}{sortKey===c.key?(sortDir==="asc"?" ↑":" ↓"):""}</th>)}<th style={th}/></tr></thead>
+        <tbody>
+          {sorted.map((deal,i)=>{
+            const days=daysUntil(deal.closeDate);
+            return(
+              <tr key={deal.id} style={{borderBottom:"1px solid "+C.border,background:i%2===0?"#fff":"#fafafa"}}>
+                <td style={{padding:"12px 14px"}}><div style={{color:C.text,fontWeight:600,marginBottom:2}}>{deal.name}</div><div style={{color:C.textLight,fontSize:11}}>{deal.account}</div></td>
+                <td style={{padding:"12px 14px"}}><span style={{background:brand.bg,color:brand.color,fontSize:11,padding:"3px 10px",borderRadius:20,fontWeight:600}}>{deal.segment}</span></td>
+                <td style={{padding:"12px 14px",color:C.textMid,fontSize:12}}>{deal.type}</td>
+                <td style={{padding:"12px 14px"}}><span style={{background:STAGE_BG[deal.stage],color:STAGE_COLORS[deal.stage],fontSize:11,padding:"3px 10px",borderRadius:20,fontWeight:600}}>{deal.stage}</span></td>
+                <td style={{padding:"12px 14px",color:C.textMid,fontWeight:600}}>{fmtFull(deal.value)}</td>
+                <td style={{padding:"12px 14px",color:brand.color,fontWeight:700}}>{fmtFull(deal.gp)}</td>
+                <td style={{padding:"12px 14px"}}><span style={{background:STATUS_BG[deal.status],color:STATUS_COLORS[deal.status],fontSize:11,padding:"3px 10px",borderRadius:20,fontWeight:600}}>{deal.status}</span></td>
+                <td style={{padding:"12px 14px"}}><span style={{display:"flex",alignItems:"center",gap:6}}><span style={{width:7,height:7,borderRadius:"50%",background:PRIORITY_DOT[deal.priority],display:"inline-block"}}/><span style={{color:C.textMid,fontSize:12}}>{deal.priority}</span></span></td>
+                <td style={{padding:"12px 14px"}}><div style={{color:days<0?"#dc2626":days<30?"#ca8a04":C.textMid,fontSize:12,fontWeight:600}}>{deal.closeDate}</div><div style={{color:C.textLight,fontSize:10}}>{days<0?Math.abs(days)+"d overdue":days+"d"}</div></td>
+                <td style={{padding:"12px 14px"}}><div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>onEdit(deal)} style={{background:"#f1f5f9",border:"1px solid "+C.border,borderRadius:6,padding:"6px 10px",cursor:"pointer"}}><Icon name="edit" size={13} color={C.textMid}/></button>
+                  <button onClick={()=>onDelete(deal.id)} style={{background:"#fee2e2",border:"1px solid #fecaca",borderRadius:6,padding:"6px 10px",cursor:"pointer"}}><Icon name="trash" size={13} color="#dc2626"/></button>
+                </div></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ForecastView({deals,brand}){
+  const active=deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+  const won=deals.filter(d=>d.stage==="Closed Won");
+  const totalRev=active.reduce((s,d)=>s+d.gp,0);
+  const wonRev=won.reduce((s,d)=>s+d.gp,0);
+  const weightedRev=active.reduce((s,d)=>s+d.gp*({Discovery:0.1,Qualified:0.25,Proposal:0.5,Negotiation:0.75}[d.stage]||0),0);
+  const byStage=STAGES.map(stage=>{const sd=deals.filter(d=>d.stage===stage);return{stage,count:sd.length,rev:sd.reduce((s,d)=>s+d.gp,0)};});
+  const maxRev=Math.max(...byStage.map(s=>s.rev),1);
+  const atRisk=deals.filter(d=>d.status==="At Risk");
+  const closing30=active.filter(d=>daysUntil(d.closeDate)<=30&&daysUntil(d.closeDate)>0);
+  const card={background:"#fff",border:"1px solid "+C.border,borderRadius:14,padding:24,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"};
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:20}}>
+      {[
+        {label:"Pipeline Revenue",value:fmt(totalRev),sub:active.length+" active deals"},
+        {label:"Weighted Forecast",value:fmt(weightedRev),sub:"Stage-weighted estimate"},
+        {label:"Closed Won Revenue",value:fmt(wonRev),sub:won.length+" deals won"},
+        {label:"At Risk",value:String(atRisk.length),sub:"Needs attention",alert:atRisk.length>0},
+      ].map(kpi=>(
+        <div key={kpi.label} style={{...card,borderTop:"3px solid "+(kpi.alert&&atRisk.length>0?"#dc2626":brand.color)}}>
+          <div style={{color:C.textMid,fontSize:11,letterSpacing:"0.07em",textTransform:"uppercase",marginBottom:12}}>{kpi.label}</div>
+          <div style={{color:kpi.alert&&atRisk.length>0?"#dc2626":brand.color,fontSize:28,fontFamily:"'DM Serif Display',serif",fontWeight:700,marginBottom:4}}>{kpi.value}</div>
+          <div style={{color:C.textLight,fontSize:12}}>{kpi.sub}</div>
+        </div>
+      ))}
+      <div style={{...card,gridColumn:"1/-1"}}>
+        <div style={{color:C.textMid,fontSize:13,fontWeight:600,marginBottom:20}}>REVENUE BY STAGE</div>
+        {byStage.map(({stage,rev,count})=>(
+          <div key={stage} style={{display:"flex",alignItems:"center",gap:16,marginBottom:12}}>
+            <div style={{width:120,flexShrink:0}}><span style={{background:STAGE_BG[stage],color:STAGE_COLORS[stage],fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>{stage}</span></div>
+            <div style={{flex:1,background:"#f1f5f9",borderRadius:4,height:20,overflow:"hidden"}}>
+              <div style={{width:(rev/maxRev*100)+"%",height:"100%",background:brand.bg,borderRight:rev>0?"3px solid "+brand.color:"none",borderRadius:4,minWidth:rev>0?4:0}}/>
+            </div>
+            <div style={{width:80,color:C.textMid,fontSize:12,fontWeight:600,textAlign:"right",flexShrink:0}}>{fmt(rev)}</div>
+            <div style={{width:55,color:C.textLight,fontSize:11,textAlign:"right",flexShrink:0}}>{count}</div>
+          </div>
+        ))}
+      </div>
+      <div style={card}>
+        <div style={{color:C.textMid,fontSize:13,fontWeight:600,marginBottom:16}}>ALERTS</div>
+        {atRisk.length>0&&<div style={{marginBottom:12}}><div style={{background:"#fef9c3",color:"#ca8a04",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,display:"inline-block",marginBottom:8}}>AT RISK ({atRisk.length})</div>{atRisk.map(d=><div key={d.id} style={{color:C.textMid,fontSize:12,marginBottom:4,paddingLeft:8,borderLeft:"2px solid #fde68a"}}>{d.name}</div>)}</div>}
+        {closing30.length>0&&<div><div style={{background:"#cffafe",color:"#0891b2",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,display:"inline-block",marginBottom:8}}>CLOSING IN 30 DAYS ({closing30.length})</div>{closing30.map(d=><div key={d.id} style={{color:C.textMid,fontSize:12,marginBottom:4,paddingLeft:8,borderLeft:"2px solid #a5f3fc"}}>{d.name} — {daysUntil(d.closeDate)}d</div>)}</div>}
+        {atRisk.length===0&&closing30.length===0&&<div style={{background:"#dcfce7",color:"#16a34a",fontSize:13,fontWeight:600,padding:"10px 14px",borderRadius:8}}>Pipeline looks healthy</div>}
+      </div>
+    </div>
+  );
+}
+
+function ParentDashboard({allDeals,onBrandSelect}){
+  const card={background:"#fff",border:"1px solid "+C.border,borderRadius:14,padding:24,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"};
+  const allActive=Object.values(allDeals).flat().filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+  const allWon=Object.values(allDeals).flat().filter(d=>d.stage==="Closed Won");
+  const totalRev=allActive.reduce((s,d)=>s+d.gp,0);
+  const wonRev=allWon.reduce((s,d)=>s+d.gp,0);
+  const totalDeals=Object.values(allDeals).flat().length;
+  const atRisk=Object.values(allDeals).flat().filter(d=>d.status==="At Risk");
+  const brandStats=BRANDS.map(b=>{const bd=allDeals[b.id]||[];const active=bd.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));const won=bd.filter(d=>d.stage==="Closed Won");return{brand:b,total:bd.length,pipeline:active.reduce((s,d)=>s+d.gp,0),won:won.reduce((s,d)=>s+d.gp,0),atRisk:bd.filter(d=>d.status==="At Risk").length};});
+  const maxPipeline=Math.max(...brandStats.map(b=>b.pipeline),1);
+  return(
+    <div>
+      <div style={{marginBottom:24}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:26,color:C.text}}>Elite365 Command Center</div>
+        <div style={{color:C.textLight,fontSize:13,marginTop:4}}>Consolidated view across all brands · {BRANDS.length} pipelines</div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:16,marginBottom:24}}>
+        {[
+          {label:"Total Pipeline Revenue",value:fmt(totalRev),color:"#0891b2"},
+          {label:"Closed Won Revenue",value:fmt(wonRev),color:"#16a34a"},
+          {label:"Total Deals",value:totalDeals,color:"#7c3aed"},
+          {label:"At Risk",value:atRisk.length,color:atRisk.length>0?"#dc2626":"#16a34a"},
+        ].map(kpi=>(
+          <div key={kpi.label} style={card}>
+            <div style={{color:C.textMid,fontSize:11,letterSpacing:"0.07em",textTransform:"uppercase",marginBottom:10}}>{kpi.label}</div>
+            <div style={{color:kpi.color,fontSize:28,fontFamily:"'DM Serif Display',serif",fontWeight:700}}>{kpi.value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{...card,marginBottom:24}}>
+        <div style={{color:C.textMid,fontSize:13,fontWeight:600,marginBottom:20}}>PIPELINE BY BRAND</div>
+        {brandStats.map(({brand,total,pipeline,atRisk})=>(
+          <div key={brand.id} style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,paddingBottom:16,borderBottom:"1px solid "+C.border}}>
+            <div style={{width:130,flexShrink:0}}>
+              <div style={{color:brand.color,fontSize:13,fontWeight:700}}>{brand.short}</div>
+              <div style={{color:C.textLight,fontSize:10,marginTop:1}}>{total} deals</div>
+            </div>
+            <div style={{flex:1,background:"#f1f5f9",borderRadius:4,height:22,overflow:"hidden",cursor:"pointer"}} onClick={()=>onBrandSelect(brand.id)}>
+              <div style={{width:(pipeline/maxPipeline*100)+"%",height:"100%",background:brand.bg,borderRight:pipeline>0?"3px solid "+brand.color:"none",borderRadius:4,minWidth:pipeline>0?4:0}}/>
+            </div>
+            <div style={{width:75,flexShrink:0,textAlign:"right"}}>
+              <div style={{color:brand.color,fontSize:13,fontWeight:700}}>{fmt(pipeline)}</div>
+            </div>
+            {atRisk>0&&<span style={{background:"#fef9c3",color:"#ca8a04",fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:20,flexShrink:0}}>⚠ {atRisk}</span>}
+            <button onClick={()=>onBrandSelect(brand.id)} style={{background:brand.bg,border:"1px solid "+brand.color+"44",color:brand.color,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:600,flexShrink:0}}>Open →</button>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:16}}>
+        {brandStats.map(({brand,total,pipeline,won,atRisk})=>(
+          <div key={brand.id} onClick={()=>onBrandSelect(brand.id)}
+            style={{background:"#fff",border:"1px solid "+C.border,borderRadius:12,padding:20,cursor:"pointer",boxShadow:"0 1px 3px rgba(0,0,0,0.04)",borderTop:"3px solid "+brand.color,transition:"box-shadow 0.15s"}}
+            onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,0.1)"}
+            onMouseLeave={e=>e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,0.04)"}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+              <div>
+                <div style={{color:brand.color,fontSize:15,fontWeight:700}}>{brand.name}</div>
+                <div style={{color:C.textLight,fontSize:11,marginTop:2}}>{brand.specialty}</div>
+              </div>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                {atRisk>0&&<span style={{background:"#fef9c3",color:"#ca8a04",fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:20}}>⚠ {atRisk}</span>}
+                <span style={{background:brand.bg,color:brand.color,fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:20}}>{total}</span>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:20}}>
+              <div><div style={{color:C.textLight,fontSize:10,textTransform:"uppercase",letterSpacing:"0.06em"}}>Pipeline</div><div style={{color:brand.color,fontSize:20,fontWeight:700,fontFamily:"'DM Serif Display',serif"}}>{fmt(pipeline)}</div></div>
+              <div><div style={{color:C.textLight,fontSize:10,textTransform:"uppercase",letterSpacing:"0.06em"}}>Won</div><div style={{color:"#16a34a",fontSize:20,fontWeight:700,fontFamily:"'DM Serif Display',serif"}}>{fmt(won)}</div></div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BrandPipeline({brand,deals,setDeals,syncStatus,onSync}){
+  const[view,setView]=useState("kanban");
+  const[modal,setModal]=useState(null);
+  const[saving,setSaving]=useState(false);
+  const[filterStage,setFilterStage]=useState("All");
+  const[search,setSearch]=useState("");
+  const filtered=useMemo(()=>deals.filter(d=>{if(filterStage!=="All"&&d.stage!==filterStage)return false;if(search&&!d.name.toLowerCase().includes(search.toLowerCase())&&!d.account.toLowerCase().includes(search.toLowerCase()))return false;return true;}),[deals,filterStage,search]);
+  const handleSave=async(deal)=>{setSaving(true);setDeals(ds=>deal.id&&ds.find(d=>d.id===deal.id)?ds.map(d=>d.id===deal.id?deal:d):[...ds,deal]);await sheetWrite("upsert",{row:dealToRow(deal)},brand.sheet);setSaving(false);setModal(null);};
+  const handleDelete=async(id)=>{setDeals(ds=>ds.filter(d=>d.id!==id));await sheetWrite("delete",{id},brand.sheet);};
+  const VIEWS=[{key:"kanban",label:"Kanban",icon:"kanban"},{key:"table",label:"Table",icon:"table"},{key:"forecast",label:"Forecast",icon:"chart"}];
+  const syncColor=syncStatus==="ok"?"#16a34a":syncStatus==="error"?"#dc2626":brand.color;
+  const syncLabel=syncStatus==="syncing"?"Syncing...":syncStatus==="ok"?"Synced":syncStatus==="error"?"Error":"Sync";
+  return(
+    <div>
+      <div style={{background:brand.bg,border:"1px solid "+brand.color+"33",borderRadius:12,padding:"16px 20px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+        <div>
+          <div style={{color:brand.color,fontSize:16,fontWeight:700}}>{brand.name}</div>
+          <div style={{color:brand.color,fontSize:12,opacity:0.75,marginTop:2}}>{brand.specialty}</div>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <button onClick={onSync} disabled={syncStatus==="syncing"} style={{display:"flex",alignItems:"center",gap:6,background:"#fff",border:"1px solid "+syncColor+"55",color:syncColor,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:12,fontWeight:600}}>
+            <Icon name="refresh" size={12} color={syncColor}/>{syncLabel}
+          </button>
+          <button onClick={()=>setModal("new")} style={{display:"flex",alignItems:"center",gap:6,background:brand.color,border:"none",color:"#fff",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13,fontWeight:700}}>
+            <Icon name="plus" size={14} color="#fff"/>New Deal
+          </button>
+        </div>
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:10,alignItems:"center",marginBottom:20}}>
+        <div style={{display:"flex",background:"#f1f5f9",border:"1px solid "+C.border,borderRadius:10,padding:3,gap:2}}>
+          {VIEWS.map(v=>(
+            <button key={v.key} onClick={()=>setView(v.key)} style={{display:"flex",alignItems:"center",gap:6,background:view===v.key?"#fff":"transparent",border:view===v.key?"1px solid "+C.border:"1px solid transparent",color:view===v.key?C.text:C.textMid,borderRadius:8,padding:"5px 12px",cursor:"pointer",fontSize:12,fontWeight:600,boxShadow:view===v.key?"0 1px 2px rgba(0,0,0,0.06)":"none"}}>
+              <Icon name={v.icon} size={13} color={view===v.key?brand.color:C.textLight}/>{v.label}
+            </button>
+          ))}
+        </div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{background:"#fff",border:"1px solid "+C.border,borderRadius:8,color:C.text,padding:"6px 12px",fontSize:12,width:180,outline:"none"}}/>
+        <select value={filterStage} onChange={e=>setFilterStage(e.target.value)} style={{background:"#fff",border:"1px solid "+C.border,borderRadius:8,color:C.textMid,padding:"6px 10px",fontSize:12}}>
+          <option value="All">All Stages</option>
+          {STAGES.map(s=><option key={s}>{s}</option>)}
+        </select>
+        <span style={{color:C.textLight,fontSize:12,marginLeft:"auto"}}>{filtered.length} deals · {fmt(filtered.reduce((s,d)=>s+d.gp,0))} revenue</span>
+      </div>
+      {view==="kanban"  &&<KanbanView   deals={filtered} onEdit={setModal} onDelete={handleDelete} brand={brand}/>}
+      {view==="table"   &&<TableView    deals={filtered} onEdit={setModal} onDelete={handleDelete} brand={brand}/>}
+      {view==="forecast"&&<ForecastView deals={filtered} brand={brand}/>}
+      {modal&&<DealModal deal={modal==="new"?null:modal} onClose={()=>setModal(null)} onSave={handleSave} saving={saving} brand={brand}/>}
+    </div>
+  );
+}
+
+function Elite365CRM(){
+  const[activeBrand,setActiveBrand]=useState(null);
+  const[allDeals,setAllDeals]=useState(()=>Object.fromEntries(BRANDS.map(b=>[b.id,[]])));
+  const[syncStatus,setSyncStatus]=useState({});
+
+  useEffect(()=>{
+    BRANDS.forEach(async brand=>{
+      setSyncStatus(s=>({...s,[brand.id]:"syncing"}));
+      const rows=await sheetRead(brand.sheet);
+      if(rows.length>0)setAllDeals(d=>({...d,[brand.id]:rows.map(rowToDeal)}));
+      setSyncStatus(s=>({...s,[brand.id]:"ok"}));
+      setTimeout(()=>setSyncStatus(s=>({...s,[brand.id]:null})),2500);
+    });
+  },[]);
+
+  const syncBrand=useCallback(async(brandId)=>{
+    const brand=BRANDS.find(b=>b.id===brandId);
+    setSyncStatus(s=>({...s,[brandId]:"syncing"}));
+    const rows=await sheetRead(brand.sheet);
+    if(rows.length>0)setAllDeals(d=>({...d,[brandId]:rows.map(rowToDeal)}));
+    setSyncStatus(s=>({...s,[brandId]:"ok"}));
+    setTimeout(()=>setSyncStatus(s=>({...s,[brandId]:null})),2500);
+  },[]);
+
+  const setDealsForBrand=useCallback((brandId,updater)=>{
+    setAllDeals(d=>({...d,[brandId]:typeof updater==="function"?updater(d[brandId]):updater}));
+  },[]);
+
+  const currentBrand=BRANDS.find(b=>b.id===activeBrand);
+  const totalAll=Object.values(allDeals).flat().length;
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text}}>
+      <div style={{borderBottom:"1px solid "+C.border,padding:"14px 32px",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fff",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",flexWrap:"wrap",gap:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <button onClick={()=>setActiveBrand(null)} style={{background:"none",border:"none",cursor:"pointer"}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:C.text,letterSpacing:"-0.02em"}}>Elite365<span style={{color:"#0891b2"}}>.</span></div>
+          </button>
+          {currentBrand&&<><span style={{color:C.textLight}}>/</span><span style={{color:currentBrand.color,fontWeight:600,fontSize:14}}>{currentBrand.name}</span></>}
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <span style={{color:C.textLight,fontSize:12}}>{totalAll} deals · {BRANDS.length} brands</span>
+          <div style={{display:"flex",alignItems:"center",gap:6,background:"#dcfce7",border:"1px solid #bbf7d0",borderRadius:20,padding:"5px 12px"}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:"#16a34a"}}/>
+            <span style={{fontSize:11,color:"#16a34a",fontWeight:600}}>Sheets Connected</span>
+          </div>
+        </div>
+      </div>
+      <div style={{borderBottom:"1px solid "+C.border,padding:"0 32px",background:"#fff",display:"flex",gap:2,overflowX:"auto"}}>
+        <button onClick={()=>setActiveBrand(null)} style={{display:"flex",alignItems:"center",gap:6,padding:"12px 14px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:600,color:activeBrand===null?C.text:C.textLight,borderBottom:activeBrand===null?"2px solid #0891b2":"2px solid transparent",whiteSpace:"nowrap"}}>
+          <Icon name="home" size={13} color={activeBrand===null?"#0891b2":C.textLight}/>Dashboard
+        </button>
+        {BRANDS.map(b=>{
+          const count=(allDeals[b.id]||[]).length;
+          return(
+            <button key={b.id} onClick={()=>setActiveBrand(b.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"12px 14px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:600,color:activeBrand===b.id?b.color:C.textLight,borderBottom:activeBrand===b.id?"2px solid "+b.color:"2px solid transparent",whiteSpace:"nowrap"}}>
+              <span style={{width:8,height:8,borderRadius:"50%",background:b.color,display:"inline-block"}}/>
+              {b.short}
+              {count>0&&<span style={{background:b.bg,color:b.color,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:20}}>{count}</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{padding:32}}>
+        {!activeBrand&&<ParentDashboard allDeals={allDeals} onBrandSelect={setActiveBrand}/>}
+        {activeBrand&&currentBrand&&<BrandPipeline brand={currentBrand} deals={allDeals[activeBrand]||[]} setDeals={(u)=>setDealsForBrand(activeBrand,u)} syncStatus={syncStatus[activeBrand]} onSync={()=>syncBrand(activeBrand)}/>}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Elite365CRM/>);
+</script>
+</body>
+</html>
